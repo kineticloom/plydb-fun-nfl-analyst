@@ -1,0 +1,162 @@
+{
+  "databases": {
+    "pbp": {
+      "metadata": {
+        "name": "NFL Play-by-Play",
+        "description": "One row per play. 370+ columns: EPA, WPA, down and distance, game state, player IDs, scoring probabilities, Vegas lines. Covers 1999–present. Filter season_type = 'REG' for regular season only."
+      },
+      "type": "file",
+      "path": "data/nflverse/pbp/Season=*/pbp.parquet",
+      "format": "parquet"
+    },
+    "player_stats_reg": {
+      "metadata": {
+        "name": "Player Stats — Regular Season (Season Totals)",
+        "description": "Regular-season cumulative stats per player. One row per player per season. Covers all positions: QBs (passing_yards, passing_tds, interceptions, sacks, passing_epa, cpoe, dakota), RBs (carries, rushing_yards, rushing_tds, rushing_epa), WR/TEs (receptions, targets, receiving_yards, receiving_tds, target_share, wopr, racr, receiving_epa), Ks (fg_made, fg_pct), and defense (def_tackles, def_sacks, def_int). Also includes fantasy_points and fantasy_points_ppr."
+      },
+      "type": "file",
+      "path": "data/nflverse/player_stats_reg/Season=*/player_stats_reg.parquet",
+      "format": "parquet"
+    },
+    "player_stats_week": {
+      "metadata": {
+        "name": "Player Stats — Weekly",
+        "description": "Weekly player stats for all positions. One row per player per week. Same columns as player_stats_reg but at weekly granularity. Useful for weekly trend analysis, injury-impact studies, and in-season splits. Includes season and week columns for time filtering."
+      },
+      "type": "file",
+      "path": "data/nflverse/player_stats_week/Season=*/player_stats_week.parquet",
+      "format": "parquet"
+    },
+    "player_stats_post": {
+      "metadata": {
+        "name": "Player Stats — Postseason",
+        "description": "Postseason cumulative stats per player. Same columns as player_stats_reg but covering only playoff games. Useful for comparing regular-season vs. playoff performance."
+      },
+      "type": "file",
+      "path": "data/nflverse/player_stats_post/Season=*/player_stats_post.parquet",
+      "format": "parquet"
+    },
+    "rosters": {
+      "metadata": {
+        "name": "Weekly Rosters",
+        "description": "Weekly roster snapshots from 1920 to present. One row per player per week per season. Includes player name, position, team abbreviation, jersey number, status (ACT/INA/RES/etc.), height, weight, birth date, college, and gsis_id."
+      },
+      "type": "file",
+      "path": "data/nflverse/rosters/Season=*/rosters.parquet",
+      "format": "parquet"
+    },
+    "snap_counts": {
+      "metadata": {
+        "name": "Weekly Snap Counts",
+        "description": "Weekly offensive, defensive, and special teams snap counts and percentages per player. One row per player per week. offense_snaps, defense_snaps, st_snaps are raw counts; offense_pct, defense_pct, st_pct are 0–100 percentages of team total. Available from 2012."
+      },
+      "type": "file",
+      "path": "data/nflverse/snap_counts/Season=*/snap_counts.parquet",
+      "format": "parquet"
+    },
+    "schedules": {
+      "metadata": {
+        "name": "Game Schedules and Results",
+        "description": "All NFL game schedules and final results from 1999 to present. One row per game. Includes game_id, season, week, game_type (REG/WC/DIV/CON/SB), teams, final scores, result (home_score - away_score), spread_line, total_line, div_game flag, roof type, surface, temperature, wind, starting QBs, and head coaches."
+      },
+      "type": "file",
+      "path": "data/nflverse/schedules/schedules.parquet",
+      "format": "parquet"
+    },
+    "ngs_passing": {
+      "metadata": {
+        "name": "NextGen Stats — Passing",
+        "description": "NFL Next Gen Stats for passers. One row per player per week (or season summary when week is NULL). Key metrics: avg_time_to_throw (seconds from snap to release), aggressiveness (% of passes into tight coverage), completion_percentage_above_expectation (CPAE), avg_air_yards_differential, passer_rating. Covers 2016–present."
+      },
+      "type": "file",
+      "path": "data/nflverse/ngs_passing/ngs_passing.parquet",
+      "format": "parquet"
+    },
+    "ngs_receiving": {
+      "metadata": {
+        "name": "NextGen Stats — Receiving",
+        "description": "NFL Next Gen Stats for receivers. One row per player per week (or season summary when week is NULL). Key metrics: avg_separation (yards of space at catch point), avg_intended_air_yards, catch_percentage, avg_yac, avg_yac_above_expectation, percent_share_of_intended_air_yards. Covers 2016–present."
+      },
+      "type": "file",
+      "path": "data/nflverse/ngs_receiving/ngs_receiving.parquet",
+      "format": "parquet"
+    },
+    "ngs_rushing": {
+      "metadata": {
+        "name": "NextGen Stats — Rushing",
+        "description": "NFL Next Gen Stats for rushers. One row per player per week (or season summary when week is NULL). Key metrics: rush_yards_over_expected (RYOE), rush_yards_over_expected_per_att, efficiency, percent_attempts_gte_eight_defenders (stacked box rate), avg_time_to_los. Covers 2016–present."
+      },
+      "type": "file",
+      "path": "data/nflverse/ngs_rushing/ngs_rushing.parquet",
+      "format": "parquet"
+    },
+    "pfr_advstats_pass": {
+      "metadata": {
+        "name": "PFR Advanced Stats — Passing",
+        "description": "Pro Football Reference advanced passing stats per player-season. Key metrics: pressure_pct (% of dropbacks QB was pressured), times_hurried, times_hit, times_sacked, blitzed, bad_throw_pct, on_tgt_pct (on-target throw rate), intended_air_yards_per_pass_attempt (ADOT). Join to players on pfr_id."
+      },
+      "type": "file",
+      "path": "data/nflverse/pfr_advstats_pass/pfr_advstats_pass.parquet",
+      "format": "parquet"
+    },
+    "pfr_advstats_rush": {
+      "metadata": {
+        "name": "PFR Advanced Stats — Rushing",
+        "description": "Pro Football Reference advanced rushing stats per player-season. Key metrics: broken_tackles, yards_before_contact, yards_before_contact_per_att, yards_after_contact, yards_after_contact_per_att. Join to players on pfr_id."
+      },
+      "type": "file",
+      "path": "data/nflverse/pfr_advstats_rush/pfr_advstats_rush.parquet",
+      "format": "parquet"
+    },
+    "pfr_advstats_rec": {
+      "metadata": {
+        "name": "PFR Advanced Stats — Receiving",
+        "description": "Pro Football Reference advanced receiving stats per player-season. Key metrics: drop_pct (drop rate), target_share (% of team targets), yards_after_catch, adot (average depth of target), broken_tackles. Join to players on pfr_id."
+      },
+      "type": "file",
+      "path": "data/nflverse/pfr_advstats_rec/pfr_advstats_rec.parquet",
+      "format": "parquet"
+    },
+    "pfr_advstats_def": {
+      "metadata": {
+        "name": "PFR Advanced Stats — Defense",
+        "description": "Pro Football Reference advanced defensive stats per player-season. Key metrics: pressures (total QB pressures), blitzes, hurries, mtackles (missed tackles), mtackle_pct (missed tackle rate), targets (times targeted in coverage), completed_passes_allowed, passer_rating_allowed. Join to players on pfr_id."
+      },
+      "type": "file",
+      "path": "data/nflverse/pfr_advstats_def/pfr_advstats_def.parquet",
+      "format": "parquet"
+    },
+    "combine": {
+      "metadata": {
+        "name": "NFL Combine Results",
+        "description": "NFL Combine workout measurements by player and draft year. One row per player. Columns: forty (40-yard dash in seconds, lower is faster), bench (225lb bench press reps), vertical (vertical leap in inches), broad_jump (inches), cone (3-cone drill seconds), shuttle (20-yard short shuttle seconds). NULL means the drill was not attempted or recorded."
+      },
+      "type": "file",
+      "path": "data/nflverse/combine/combine.parquet",
+      "format": "parquet"
+    },
+    "draft_picks": {
+      "metadata": {
+        "name": "NFL Draft Picks",
+        "description": "Historical NFL Draft picks from 1936 to present. One row per player selected. Key columns: season (draft year), round, pick (overall pick number), team (selecting team), player_name, position, college, w_av (weighted approximate value — career performance metric), car_av (career AV), dr_av (AV with drafting team only), hof (Hall of Fame flag)."
+      },
+      "type": "file",
+      "path": "data/nflverse/draft_picks/draft_picks.parquet",
+      "format": "parquet"
+    },
+    "players": {
+      "metadata": {
+        "name": "Player ID Register",
+        "description": "Cross-system player ID register. One row per player. Maps gsis_id (used in most nflverse tables as the primary key) to pfr_id (Pro Football Reference, used in pfr_advstats and snap_counts), espn_id, pff_id, and others. Also includes display_name, position, status, and current team. Essential for resolving player IDs to names and joining across data sources."
+      },
+      "type": "file",
+      "path": "data/nflverse/players/players.parquet",
+      "format": "parquet"
+    }
+  },
+  "semantic_context": {
+    "overlays": [
+      "plydb-overlay.yaml"
+    ]
+  }
+}

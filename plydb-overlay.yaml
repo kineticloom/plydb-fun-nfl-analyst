@@ -1,0 +1,1408 @@
+# yaml-language-server: $schema=.claude/skills/plydb/references/OSI/core-spec/osi-schema.json
+
+# Semantic overlay for the nflverse NFL dataset.
+
+version: "1.0"
+
+semantic_model:
+  - name: nfl_nflverse
+    description: >
+      NFL data sourced from the nflverse ecosystem. Covers play-by-play data,
+      season and weekly player statistics (all positions in one table), weekly
+      rosters, game schedules, snap counts, NFL NextGen Stats, Pro Football
+      Reference advanced stats, the NFL Combine, and the Draft. The season
+      column is the primary temporal join key. Most tables identify players by
+      gsis_id; the players table is the cross-system ID bridge.
+
+    ai_context:
+      instructions: >
+        PLAYER IDENTITY: Most nflverse tables use gsis_id as the primary player
+        key. In pbp, passer_id / rusher_id / receiver_id are gsis_id values —
+        join to players.gsis_id. player_stats_reg and player_stats_week use
+        player_id (= gsis_id) — join to players.gsis_id. snap_counts uses
+        pfr_player_id — join to players.pfr_id. pfr_advstats tables use pfr_id
+        — join to players.pfr_id.
+
+        SEASON TYPE: season_type = 'REG' for regular season, 'POST' for
+        playoffs. Always filter WHERE season_type = 'REG' unless postseason
+        analysis is specifically requested. The schedules table uses game_type
+        instead: 'REG', 'WC', 'DIV', 'CON', 'SB'.
+
+        PLAY TYPES (pbp): play_type values are 'pass', 'run', 'punt',
+        'field_goal', 'kickoff', 'extra_point', 'two_point_attempt',
+        'no_play', 'qb_kneel', 'qb_spike'. For offensive plays use
+        play_type IN ('pass', 'run'). To include QB scrambles (coded as
+        runs but initiated as passes) add OR qb_scramble = 1.
+
+        EPA (Expected Points Added): The epa column in pbp is the single most
+        useful per-play efficiency metric. Positive = offense gained value.
+        AVG(epa) WHERE play_type IN ('pass','run') measures offensive
+        efficiency. success = 1 means the play generated positive EPA.
+
+        WPA: wpa is win probability added per play. vegas_wpa uses a
+        spread-adjusted model and is more accurate than wpa for lopsided games.
+
+        PASS OVER EXPECTED: xpass = model-predicted pass probability given
+        game state. pass_oe = actual_pass_indicator - xpass. Positive means
+        team passed more than expected. cpoe = completion pct over expected on
+        this play (per-play value in pbp).
+
+        PLAYER STATS COLUMN NAMES: In player_stats_reg/week/post, the column
+        for interceptions thrown is passing_interceptions (not interceptions).
+        The column for sacks taken is sacks_suffered (not sacks). The column
+        for completion pct over expected is passing_cpoe (not cpoe). There is
+        no dakota column in these tables.
+
+        SCHEDULES: result = home_score - away_score. Positive = home win.
+        away_rest and home_rest are days of rest since last game. The table
+        has no season_type column; use game_type = 'REG' for regular season.
+
+        NGS DATA: ngs_passing, ngs_receiving, ngs_rushing contain rows for
+        individual weeks and season summaries. Season summaries have week = NULL
+        (or a NULL-equivalent). Filter WHERE week IS NULL for season totals.
+        All NGS covers 2016+. Player ID column is player_gsis_id.
+
+        PFR ADVSTATS: pfr_advstats tables use pfr_id (join to players.pfr_id).
+        Team column is tm (not team). Key abbreviated column names:
+        pfr_advstats_rush: brk_tkl = broken tackles, ybc = yards before
+        contact, yac = yards after contact, att_br = broken tackles per att.
+        pfr_advstats_rec: brk_tkl = broken tackles, drop_percent = drop rate.
+        pfr_advstats_def: prss = pressures, m_tkl = missed tackles,
+        m_tkl_percent = missed tackle rate, bltz = blitzes, hrry = hurries,
+        qbkd = QB knockdowns, sk = sacks, rat = passer rating allowed.
+
+        COMBINE: forty = 40-yard dash (lower is faster). bench = 225lb bench
+        press reps. vertical = vertical leap in inches. broad_jump = broad
+        jump in inches. cone = 3-cone drill in seconds. shuttle = short shuttle.
+        NULL means the drill was not performed. draft_year and season hold the
+        same value (draft class year).
+
+        DRAFT PICKS: season = draft year. gsis_id is populated for most modern
+        players and joins directly to players.gsis_id. pfr_player_id joins to
+        players.pfr_id. w_av = weighted approximate value (career metric,
+        recent seasons weighted more). hof = Hall of Fame flag.
+
+        TEAM ABBREVIATIONS: nflverse uses standard 3-letter codes. Las Vegas
+        Raiders = 'LV', Los Angeles Rams = 'LA', Los Angeles Chargers = 'LAC',
+        Washington Commanders = 'WAS'.
+
+      examples:
+        - "Which quarterbacks had the highest EPA per pass attempt in 2024?"
+        - "Which teams run the ball most on first down, and does it help?"
+        - "Which QBs perform best in the fourth quarter of close games?"
+        - "Who are the most open wide receivers in the league this season?"
+        - "Which coaches go for it on fourth down most aggressively?"
+        - "How much does home-field advantage matter in playoffs vs regular season?"
+        - "Which 2023 draft class rookies had the highest EPA in their first season?"
+        - "What combine metrics best predict wide receiver success?"
+
+    datasets:
+
+      # -----------------------------------------------------------------------
+      - name: pbp
+        source: pbp.default.pbp
+        primary_key: [game_id, play_id]
+        description: >
+          Play-by-play data. One row per play. Every scrimmage play since 1999
+          with game state, player IDs, outcomes, and advanced metrics including
+          EPA, WPA, win probability, air yards, cpoe, and xpass. The foundation
+          for offensive and defensive efficiency analysis.
+        ai_context:
+          synonyms:
+            - "play by play"
+            - "plays"
+            - "nflfastR"
+            - "EPA data"
+            - "WPA data"
+          instructions: >
+            passer_id, rusher_id, receiver_id are gsis_id strings — join to
+            players.gsis_id. passer_player_name, rusher_player_name,
+            receiver_player_name are short names (e.g. "P.Mahomes") and may
+            be NULL in edge cases; prefer joining to players for reliable names.
+            game_id format is "{season}_{week:02d}_{away}_{home}", e.g.
+            "2024_01_KC_BAL" — matches schedules.game_id.
+
+        fields:
+          - name: season
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: season
+            description: NFL season year.
+            dimension:
+              is_time: true
+            ai_context:
+              synonyms: ["year", "season year"]
+
+          - name: season_type
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: season_type
+            description: "'REG' for regular season; 'POST' for playoffs."
+            ai_context:
+              synonyms: ["regular season", "postseason", "playoffs"]
+
+          - name: posteam
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: posteam
+            description: Team with possession (offense). 3-letter abbreviation.
+            ai_context:
+              synonyms: ["offense", "offensive team", "team with the ball", "possession team"]
+
+          - name: defteam
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: defteam
+            description: Defending team. 3-letter abbreviation.
+            ai_context:
+              synonyms: ["defense", "defensive team"]
+
+          - name: play_type
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: play_type
+            description: >
+              Type of play: 'pass', 'run', 'punt', 'field_goal', 'kickoff',
+              'extra_point', 'two_point_attempt', 'no_play', 'qb_kneel',
+              'qb_spike'. Filter play_type IN ('pass', 'run') for offensive
+              plays.
+            ai_context:
+              synonyms: ["play call", "run play", "pass play"]
+
+          - name: qb_scramble
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: qb_scramble
+            description: >
+              1 if the QB scrambled (coded as a run in play_type but initiated
+              as a pass). Include in passing analysis:
+              WHERE play_type = 'pass' OR qb_scramble = 1.
+            ai_context:
+              synonyms: ["scramble", "quarterback scramble"]
+
+          - name: epa
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: epa
+            description: >
+              Expected Points Added per play. Positive = offense gained value.
+              The single best per-play efficiency metric. Use AVG(epa) over
+              offensive plays.
+            ai_context:
+              synonyms: ["expected points added", "EPA/play", "efficiency"]
+
+          - name: success
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: success
+            description: 1 if epa > 0 (a successful play). AVG(success) = success rate.
+            ai_context:
+              synonyms: ["successful play", "success rate"]
+
+          - name: wpa
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: wpa
+            description: Win Probability Added. The best measure of clutch play value.
+            ai_context:
+              synonyms: ["win probability added", "clutch", "WPA"]
+
+          - name: vegas_wpa
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: vegas_wpa
+            description: WPA using a spread-adjusted win probability model. More accurate for lopsided games.
+            ai_context:
+              synonyms: ["vegas win probability added", "spread-adjusted WPA"]
+
+          - name: wp
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: wp
+            description: Win probability for the possession team at play start.
+            ai_context:
+              synonyms: ["win probability", "WP"]
+
+          - name: vegas_wp
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: vegas_wp
+            description: Spread-adjusted win probability at play start.
+            ai_context:
+              synonyms: ["vegas win probability", "spread-adjusted WP"]
+
+          - name: score_differential
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: score_differential
+            description: >
+              posteam_score - defteam_score at play start. Positive = offense
+              leading. Use ABS(score_differential) <= 7 for close games.
+            ai_context:
+              synonyms: ["score margin", "close game", "garbage time"]
+
+          - name: spread_line
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: spread_line
+            description: Pre-game Vegas point spread. Negative = home team favored.
+            ai_context:
+              synonyms: ["point spread", "Vegas line", "spread"]
+
+          - name: xpass
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: xpass
+            description: >
+              Model-predicted probability the play is a pass, given game state.
+              Use with pass_oe to measure passing aggressiveness.
+            ai_context:
+              synonyms: ["expected pass rate", "predicted pass probability"]
+
+          - name: pass_oe
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: pass_oe
+            description: >
+              Pass rate over expected: actual_pass - xpass. Positive = passed
+              more than expected. Better measure of aggressiveness than raw
+              pass rate.
+            ai_context:
+              synonyms: ["pass rate over expected", "passing aggressiveness", "pass tendency"]
+
+          - name: cpoe
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: cpoe
+            description: >
+              Per-play completion percentage over expected. How much better/worse
+              than model predictions on this specific throw. NOTE: In
+              player_stats_reg this column is named passing_cpoe (season total).
+            ai_context:
+              synonyms: ["completion percentage over expected", "CPOE", "QB accuracy"]
+
+          - name: qb_epa
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: qb_epa
+            description: EPA adjusted to remove receiver YAC contribution. Isolates passer contribution.
+            ai_context:
+              synonyms: ["QB EPA", "passer EPA", "air EPA"]
+
+          - name: passer_id
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: passer_id
+            description: gsis_id of the QB. Joins to players.gsis_id. Same value as passer_player_id.
+            ai_context:
+              synonyms: ["quarterback id", "QB id"]
+
+          - name: rusher_id
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: rusher_id
+            description: gsis_id of the ball carrier. Joins to players.gsis_id. Same value as rusher_player_id.
+            ai_context:
+              synonyms: ["runner id", "ball carrier id"]
+
+          - name: receiver_id
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: receiver_id
+            description: gsis_id of the intended receiver. Joins to players.gsis_id. Same value as receiver_player_id.
+            ai_context:
+              synonyms: ["receiver gsis_id", "target id"]
+
+      # -----------------------------------------------------------------------
+      - name: player_stats_reg
+        source: player_stats_reg.default.player_stats_reg
+        primary_key: [player_id, season]
+        description: >
+          Regular-season cumulative statistics per player. One row per player
+          per season. All positions in one table (QB, RB, WR, TE, K, defense).
+          For weekly granularity use player_stats_week; for postseason use
+          player_stats_post.
+        ai_context:
+          synonyms:
+            - "player stats"
+            - "offensive stats"
+            - "QB stats"
+            - "WR stats"
+            - "RB stats"
+            - "season stats"
+            - "defensive stats"
+          instructions: >
+            player_id = gsis_id; join to players.gsis_id for full name.
+            player_display_name is the preferred full name.
+            Interceptions thrown = passing_interceptions (not interceptions).
+            Times sacked = sacks_suffered (not sacks).
+            Season-level completion pct over expected = passing_cpoe (not cpoe).
+            There is no dakota column.
+            pacr = passing yards / air yards (QB air conversion efficiency).
+            racr = receiving yards / air yards (receiver YAC efficiency).
+            wopr = 0.7 * target_share + 0.5 * air_yards_share (opportunity).
+            Defensive columns are prefixed def_: def_tackles_solo,
+            def_sacks, def_interceptions, def_pass_defended, etc.
+
+        fields:
+          - name: player_id
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: player_id
+            description: Player's gsis_id. Join to players.gsis_id.
+            ai_context:
+              synonyms: ["gsis_id", "player identifier"]
+
+          - name: player_display_name
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: player_display_name
+            description: Full player display name (e.g. "Patrick Mahomes"). Preferred over player_name.
+            ai_context:
+              synonyms: ["player name", "full name", "name"]
+
+          - name: position
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: position
+            description: Player's primary position (QB, RB, WR, TE, K, etc.).
+            ai_context:
+              synonyms: ["pos", "position group", "role"]
+
+          - name: recent_team
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: recent_team
+            description: Team abbreviation at end of season.
+            ai_context:
+              synonyms: ["team", "franchise"]
+
+          - name: passing_interceptions
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: passing_interceptions
+            description: Interceptions thrown. The column is passing_interceptions, NOT interceptions.
+            ai_context:
+              synonyms: ["INTs", "interceptions thrown", "picks"]
+
+          - name: sacks_suffered
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: sacks_suffered
+            description: Times the QB was sacked. The column is sacks_suffered, NOT sacks.
+            ai_context:
+              synonyms: ["sacks taken", "times sacked", "QB sacks allowed"]
+
+          - name: passing_cpoe
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: passing_cpoe
+            description: Season-level completion percentage over expected. The column is passing_cpoe, NOT cpoe.
+            ai_context:
+              synonyms: ["CPOE", "completion over expected", "QB accuracy season"]
+
+          - name: pacr
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: pacr
+            description: Passing Air Conversion Ratio (passing_yards / air_yards). Values > 1 mean YAC on top of air yards.
+            ai_context:
+              synonyms: ["PACR", "air conversion", "passing efficiency ratio"]
+
+          - name: target_share
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: target_share
+            description: Fraction of team targets this receiver saw (0 to 1).
+            ai_context:
+              synonyms: ["target share", "opportunity share", "target %"]
+
+          - name: air_yards_share
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: air_yards_share
+            description: Fraction of team intended air yards this receiver accounted for (0 to 1).
+            ai_context:
+              synonyms: ["air yards share", "deep target share"]
+
+          - name: wopr
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: wopr
+            description: Weighted Opportunity Rating (0.7 * target_share + 0.5 * air_yards_share). Higher = more involved.
+            ai_context:
+              synonyms: ["WOPR", "weighted opportunity", "opportunity rating"]
+
+          - name: racr
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: racr
+            description: Receiver Air Conversion Ratio (receiving_yards / air_yards). Values > 1 mean the receiver generates YAC.
+            ai_context:
+              synonyms: ["RACR", "receiver air conversion"]
+
+          - name: fantasy_points
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: fantasy_points
+            description: Fantasy points in standard scoring (4 pts/pass TD, 6 pts/rush+rec TD).
+            ai_context:
+              synonyms: ["standard fantasy", "fantasy scoring"]
+
+          - name: fantasy_points_ppr
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: fantasy_points_ppr
+            description: Fantasy points in PPR (Points Per Reception) scoring.
+            ai_context:
+              synonyms: ["PPR", "PPR fantasy", "per reception scoring"]
+
+      # -----------------------------------------------------------------------
+      - name: player_stats_week
+        source: player_stats_week.default.player_stats_week
+        primary_key: [player_id, season, week]
+        description: >
+          Weekly player statistics for all positions. Same columns as
+          player_stats_reg but at weekly granularity. One row per player per
+          week. Useful for weekly trend analysis and in-season splits.
+        ai_context:
+          synonyms:
+            - "weekly stats"
+            - "week by week"
+            - "weekly player stats"
+          instructions: >
+            Same column structure as player_stats_reg including the corrected
+            column names (passing_interceptions, sacks_suffered, passing_cpoe).
+            Join player_id to players.gsis_id for names.
+
+        fields:
+          - name: week
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: week
+            description: Week number (1-18 regular season; 19-22 playoffs).
+            dimension:
+              is_time: true
+            ai_context:
+              synonyms: ["game week", "week number"]
+
+      # -----------------------------------------------------------------------
+      - name: player_stats_post
+        source: player_stats_post.default.player_stats_post
+        primary_key: [player_id, season]
+        description: >
+          Postseason cumulative statistics per player. Same columns as
+          player_stats_reg but covering only playoff games.
+        ai_context:
+          synonyms:
+            - "postseason stats"
+            - "playoff stats"
+          instructions: >
+            Same column structure as player_stats_reg. Join player_id to
+            players.gsis_id for names.
+
+      # -----------------------------------------------------------------------
+      - name: players
+        source: players.default.players
+        primary_key: [gsis_id]
+        description: >
+          Cross-system player ID register. One row per player. Maps gsis_id
+          (used in most nflverse tables) to pfr_id, espn_id, pff_id, and more.
+          Contains display_name, position, status, and latest_team.
+        ai_context:
+          synonyms:
+            - "player register"
+            - "player lookup"
+            - "player IDs"
+            - "player names"
+          instructions: >
+            gsis_id is the primary join key for pbp, player_stats_*, ngs, and
+            rosters. pfr_id is the join key for pfr_advstats tables and
+            snap_counts (pfr_player_id). Column names differ from other tools:
+            team column is latest_team (not team_abbr). Headshot column is
+            headshot (not headshot_url). Years of experience column is
+            years_of_experience. Status values: 'ACT' (active), 'INA'
+            (inactive/retired), 'RES' (reserve/IR), 'DEV' (practice squad).
+
+        fields:
+          - name: gsis_id
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: gsis_id
+            description: Primary player identifier for most nflverse tables.
+            ai_context:
+              synonyms: ["player id", "nflverse id"]
+
+          - name: display_name
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: display_name
+            description: Full player display name (e.g. "Patrick Mahomes"). Preferred for names.
+            ai_context:
+              synonyms: ["player name", "full name", "name"]
+
+          - name: pfr_id
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: pfr_id
+            description: Pro Football Reference player ID. Used in pfr_advstats tables and snap_counts (pfr_player_id).
+            ai_context:
+              synonyms: ["PFR id", "pro football reference id"]
+
+          - name: latest_team
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: latest_team
+            description: Current or most recent team abbreviation. Column is latest_team (not team_abbr).
+            ai_context:
+              synonyms: ["team", "current team", "team_abbr"]
+
+          - name: position
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: position
+            description: Player's primary position.
+            ai_context:
+              synonyms: ["pos", "position group"]
+
+      # -----------------------------------------------------------------------
+      - name: schedules
+        source: schedules.default.schedules
+        primary_key: [game_id]
+        description: >
+          All NFL game schedules and results from 1999 to present. One row per
+          game. Includes scores, Vegas lines, weather, stadium, coaches,
+          starting QBs, and days of rest. No season_type column; use game_type.
+        ai_context:
+          synonyms:
+            - "games"
+            - "results"
+            - "scores"
+            - "win loss record"
+            - "schedule"
+          instructions: >
+            result = home_score - away_score (positive = home win).
+            game_type = 'REG' for regular season (no season_type column here).
+            away_rest and home_rest = days since each team's last game.
+            The table has no season_type column; filter game_type = 'REG'
+            for regular season games.
+
+        fields:
+          - name: result
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: result
+            description: "home_score - away_score. Positive = home win; negative = away win; 0 = tie."
+            ai_context:
+              synonyms: ["margin of victory", "score margin", "home margin"]
+
+          - name: game_type
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: game_type
+            description: "'REG', 'WC' (wild card), 'DIV' (divisional), 'CON' (conference), 'SB' (Super Bowl)."
+            ai_context:
+              synonyms: ["type of game", "regular season vs playoffs", "postseason", "season_type"]
+
+          - name: spread_line
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: spread_line
+            description: Pre-game Vegas point spread. Negative = home team favored.
+            ai_context:
+              synonyms: ["Vegas spread", "point spread", "line"]
+
+          - name: total_line
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: total_line
+            description: Pre-game Vegas over/under total.
+            ai_context:
+              synonyms: ["over/under", "total"]
+
+          - name: div_game
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: div_game
+            description: 1 if both teams are in the same division.
+            ai_context:
+              synonyms: ["divisional game", "division matchup"]
+
+          - name: away_rest
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: away_rest
+            description: Days of rest for the away team since their last game.
+            ai_context:
+              synonyms: ["away team rest", "visitor rest days"]
+
+          - name: home_rest
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: home_rest
+            description: Days of rest for the home team since their last game.
+            ai_context:
+              synonyms: ["home team rest", "home rest days"]
+
+      # -----------------------------------------------------------------------
+      - name: snap_counts
+        source: snap_counts.default.snap_counts
+        primary_key: [pfr_player_id, season, week, team]
+        description: >
+          Weekly snap counts and percentages per player. Covers offensive,
+          defensive, and special teams snaps. Available from 2012.
+        ai_context:
+          synonyms:
+            - "snap counts"
+            - "playing time"
+            - "snaps"
+            - "usage"
+          instructions: >
+            Uses pfr_player_id (not gsis_id). Join to players.pfr_id.
+            offense_pct, defense_pct, st_pct are percentages (0-100).
+
+        fields:
+          - name: pfr_player_id
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: pfr_player_id
+            description: Pro Football Reference player ID. Join to players.pfr_id (not gsis_id).
+            ai_context:
+              synonyms: ["PFR id", "player id snap counts"]
+
+          - name: offense_pct
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: offense_pct
+            description: Percentage of team's offensive snaps the player was on field (0-100).
+            ai_context:
+              synonyms: ["offensive snap share", "offensive playing time", "offense %"]
+
+          - name: defense_pct
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: defense_pct
+            description: Percentage of team's defensive snaps the player was on field (0-100).
+            ai_context:
+              synonyms: ["defensive snap share", "defense %"]
+
+          - name: st_pct
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: st_pct
+            description: Percentage of team's special teams snaps the player was on field (0-100).
+            ai_context:
+              synonyms: ["special teams snap share", "ST %"]
+
+      # -----------------------------------------------------------------------
+      - name: ngs_passing
+        source: ngs_passing.default.ngs_passing
+        primary_key: [player_gsis_id, season, week]
+        description: >
+          NFL Next Gen Stats for passers. One row per player per week plus
+          season totals (week = NULL). Covers 2016+. Key metrics measure time
+          to throw, aggressiveness, and completion rate vs model expectations.
+        ai_context:
+          synonyms:
+            - "NextGen Stats passing"
+            - "NGS passing"
+            - "time to throw"
+            - "aggressiveness"
+            - "CPAE"
+          instructions: >
+            Join player_gsis_id to players.gsis_id. Filter week IS NULL for
+            season totals. No player_name column; use player_display_name.
+            completion_percentage_above_expectation (CPAE) measures how much
+            better/worse the QB completes passes vs model expectations.
+            aggressiveness = % of attempts into tight coverage (< 1 yard
+            separation). avg_time_to_throw = seconds from snap to release.
+
+        fields:
+          - name: player_gsis_id
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: player_gsis_id
+            description: gsis_id of the passer. Join to players.gsis_id.
+            ai_context:
+              synonyms: ["gsis_id", "QB id"]
+
+          - name: completion_percentage_above_expectation
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: completion_percentage_above_expectation
+            description: CPAE - actual completion % minus expected completion %. Positive = outperforming the model.
+            ai_context:
+              synonyms: ["CPAE", "completion over expected", "accuracy above expected"]
+
+          - name: aggressiveness
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: aggressiveness
+            description: "% of attempts thrown into tight windows (< 1 yard of separation). Higher = more aggressive."
+            ai_context:
+              synonyms: ["tight window throws", "risky throws", "aggressive passing"]
+
+          - name: avg_time_to_throw
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: avg_time_to_throw
+            description: Average seconds from snap to release. Typical range 2.3-3.0s.
+            ai_context:
+              synonyms: ["time to throw", "TTT", "quick release"]
+
+      # -----------------------------------------------------------------------
+      - name: ngs_receiving
+        source: ngs_receiving.default.ngs_receiving
+        primary_key: [player_gsis_id, season, week]
+        description: >
+          NFL Next Gen Stats for receivers. One row per player per week plus
+          season totals (week = NULL). Covers 2016+. Measures separation at
+          catch point and yards after catch vs expectations.
+        ai_context:
+          synonyms:
+            - "NextGen Stats receiving"
+            - "receiver separation"
+            - "YAC above expected"
+          instructions: >
+            Join player_gsis_id to players.gsis_id. Filter week IS NULL for
+            season totals. avg_separation = yards of space at the catch or
+            target point (higher = more open). avg_yac_above_expectation =
+            YAC beyond model predictions (positive = making extra yards).
+
+        fields:
+          - name: player_gsis_id
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: player_gsis_id
+            description: gsis_id of the receiver. Join to players.gsis_id.
+            ai_context:
+              synonyms: ["gsis_id", "receiver id"]
+
+          - name: avg_separation
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: avg_separation
+            description: Average yards of separation from nearest defender at catch/target point. Higher = more open.
+            ai_context:
+              synonyms: ["separation", "open space", "getting open", "route running"]
+
+          - name: avg_yac_above_expectation
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: avg_yac_above_expectation
+            description: Average YAC above model expectation. Positive = generates extra yards after the catch.
+            ai_context:
+              synonyms: ["YAC above expected", "after-catch ability"]
+
+          - name: percent_share_of_intended_air_yards
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: percent_share_of_intended_air_yards
+            description: Receiver's share of team's intended air yards (0-100).
+            ai_context:
+              synonyms: ["air yards share NGS", "deep target share NGS"]
+
+      # -----------------------------------------------------------------------
+      - name: ngs_rushing
+        source: ngs_rushing.default.ngs_rushing
+        primary_key: [player_gsis_id, season, week]
+        description: >
+          NFL Next Gen Stats for rushers. One row per player per week plus
+          season totals (week = NULL). Covers 2016+. Key metric is rush yards
+          over expected (RYOE).
+        ai_context:
+          synonyms:
+            - "NextGen Stats rushing"
+            - "RYOE"
+            - "rush yards over expected"
+          instructions: >
+            Join player_gsis_id to players.gsis_id. Filter week IS NULL for
+            season totals. rush_yards_over_expected = total RYOE.
+            rush_yards_over_expected_per_att = RYOE per carry (rate metric).
+            percent_attempts_gte_eight_defenders = % of carries facing 8+
+            defenders in the box (stacked box rate).
+
+        fields:
+          - name: player_gsis_id
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: player_gsis_id
+            description: gsis_id of the rusher. Join to players.gsis_id.
+            ai_context:
+              synonyms: ["gsis_id", "rusher id"]
+
+          - name: rush_yards_over_expected
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: rush_yards_over_expected
+            description: Total rushing yards above model expectation. Positive = outperforming predictions.
+            ai_context:
+              synonyms: ["RYOE", "rush over expected", "rushing value above model"]
+
+          - name: rush_yards_over_expected_per_att
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: rush_yards_over_expected_per_att
+            description: RYOE per carry attempt. The per-carry efficiency version of RYOE.
+            ai_context:
+              synonyms: ["RYOE per carry", "rushing efficiency over expected"]
+
+          - name: percent_attempts_gte_eight_defenders
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: percent_attempts_gte_eight_defenders
+            description: "% of carries against 8+ defenders in the box. Higher = defense stacks the box against this runner."
+            ai_context:
+              synonyms: ["stacked box rate", "8 in the box", "box defender rate"]
+
+      # -----------------------------------------------------------------------
+      - name: pfr_advstats_pass
+        source: pfr_advstats_pass.default.pfr_advstats_pass
+        primary_key: [pfr_id, season]
+        description: >
+          PFR advanced passing stats per player-season. Covers pressure rate,
+          pocket time, on-target throw rate, bad throw rate, and ADOT. Join
+          to players on pfr_id.
+        ai_context:
+          synonyms:
+            - "PFR passing stats"
+            - "pressure rate"
+            - "ADOT"
+            - "bad throw rate"
+            - "on-target rate"
+          instructions: >
+            Join pfr_id to players.pfr_id (not gsis_id).
+            pressure_pct = % of dropbacks QB was pressured.
+            on_tgt_pct = on-target throw rate (catchable without adjustment).
+            bad_throw_pct = % of passes that were inaccurate/uncatchable.
+            intended_air_yards_per_pass_attempt = ADOT (avg depth of target).
+            pocket_time = avg seconds QB held ball in pocket.
+
+        fields:
+          - name: pfr_id
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: pfr_id
+            description: PFR player ID. Join to players.pfr_id.
+            ai_context:
+              synonyms: ["PFR id"]
+
+          - name: pressure_pct
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: pressure_pct
+            description: "% of dropbacks QB was pressured."
+            ai_context:
+              synonyms: ["pressure rate", "under pressure %"]
+
+          - name: on_tgt_pct
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: on_tgt_pct
+            description: On-target throw percentage (passes catchable without adjustment).
+            ai_context:
+              synonyms: ["on target rate", "accuracy", "on-target %"]
+
+          - name: bad_throw_pct
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: bad_throw_pct
+            description: "% of passes that were bad/inaccurate/uncatchable."
+            ai_context:
+              synonyms: ["bad throw rate", "inaccuracy rate"]
+
+          - name: intended_air_yards_per_pass_attempt
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: intended_air_yards_per_pass_attempt
+            description: ADOT - average depth of target including incomplete passes.
+            ai_context:
+              synonyms: ["ADOT", "average depth of target", "throw depth"]
+
+          - name: pocket_time
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: pocket_time
+            description: Average seconds QB held the ball in the pocket before throwing or scrambling.
+            ai_context:
+              synonyms: ["time in pocket", "pocket presence", "hold time"]
+
+      # -----------------------------------------------------------------------
+      - name: pfr_advstats_rush
+        source: pfr_advstats_rush.default.pfr_advstats_rush
+        primary_key: [pfr_id, season]
+        description: >
+          PFR advanced rushing stats per player-season. Key metrics cover
+          broken tackles, yards before contact, and yards after contact.
+          Team column is tm. Join to players on pfr_id.
+        ai_context:
+          synonyms:
+            - "PFR rushing stats"
+            - "broken tackles rushing"
+            - "yards before contact"
+          instructions: >
+            Join pfr_id to players.pfr_id. Team column is tm (not team).
+            brk_tkl = broken tackles total.
+            ybc = yards before contact (total), ybc_att = per attempt.
+            yac = yards after contact (total), yac_att = per attempt.
+
+        fields:
+          - name: brk_tkl
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: brk_tkl
+            description: Total broken tackles on run plays. Column is brk_tkl (not broken_tackles).
+            ai_context:
+              synonyms: ["broken tackles", "missed tackles forced rushing"]
+
+          - name: ybc
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: ybc
+            description: Total yards before contact. Column is ybc (not yards_before_contact).
+            ai_context:
+              synonyms: ["yards before contact total", "YBC"]
+
+          - name: yac
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: yac
+            description: Total yards after contact. Column is yac (not yards_after_contact).
+            ai_context:
+              synonyms: ["yards after contact total", "YAC rushing"]
+
+      # -----------------------------------------------------------------------
+      - name: pfr_advstats_rec
+        source: pfr_advstats_rec.default.pfr_advstats_rec
+        primary_key: [pfr_id, season]
+        description: >
+          PFR advanced receiving stats per player-season. Key metrics cover
+          drop rate, broken tackles, yards after catch, and ADOT. Team column
+          is tm. Join to players on pfr_id.
+        ai_context:
+          synonyms:
+            - "PFR receiving stats"
+            - "drop rate receiving"
+            - "receiver broken tackles"
+          instructions: >
+            Join pfr_id to players.pfr_id. Team column is tm (not team).
+            drop_percent = drop rate (not drop_pct).
+            brk_tkl = broken tackles after reception.
+            adot = average depth of target.
+
+        fields:
+          - name: drop_percent
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: drop_percent
+            description: "Drop rate percentage. Column is drop_percent (not drop_pct)."
+            ai_context:
+              synonyms: ["drop rate", "drop %", "drops per target"]
+
+          - name: adot
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: adot
+            description: Average depth of target including incomplete passes.
+            ai_context:
+              synonyms: ["ADOT receiving", "average depth of target receiver", "route depth"]
+
+          - name: brk_tkl
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: brk_tkl
+            description: Broken tackles after reception. Column is brk_tkl (not broken_tackles).
+            ai_context:
+              synonyms: ["broken tackles receiving", "missed tackles forced receiving"]
+
+      # -----------------------------------------------------------------------
+      - name: pfr_advstats_def
+        source: pfr_advstats_def.default.pfr_advstats_def
+        primary_key: [pfr_id, season]
+        description: >
+          PFR advanced defensive stats per player-season. Key metrics cover
+          pressures, missed tackles, and coverage. Team column is tm. Join
+          to players on pfr_id.
+        ai_context:
+          synonyms:
+            - "PFR defensive stats"
+            - "defensive pressures"
+            - "missed tackle rate"
+            - "coverage stats"
+          instructions: >
+            Join pfr_id to players.pfr_id. Team column is tm (not team).
+            Abbreviated column names: prss = total pressures, m_tkl = missed
+            tackles, m_tkl_percent = missed tackle rate, bltz = blitzes,
+            hrry = hurries, qbkd = QB knockdowns, sk = sacks,
+            tgt = times targeted in coverage, cmp = completions allowed,
+            cmp_percent = completion % allowed, rat = passer rating allowed.
+
+        fields:
+          - name: prss
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: prss
+            description: Total QB pressures (hurries + hits + sacks). Column is prss (not pressures).
+            ai_context:
+              synonyms: ["pressures", "QB pressures total", "pass rush pressure"]
+
+          - name: m_tkl
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: m_tkl
+            description: Missed tackles. Column is m_tkl (not missed_tackles or mtackles).
+            ai_context:
+              synonyms: ["missed tackles", "missed tackle count"]
+
+          - name: m_tkl_percent
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: m_tkl_percent
+            description: "Missed tackle rate %. Column is m_tkl_percent (not mtackle_pct)."
+            ai_context:
+              synonyms: ["missed tackle rate", "missed tackle %"]
+
+          - name: rat
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: rat
+            description: Passer rating when targeted in coverage. Lower is better for defenders.
+            ai_context:
+              synonyms: ["passer rating allowed", "QB rating in coverage"]
+
+      # -----------------------------------------------------------------------
+      - name: combine
+        source: combine.default.combine
+        primary_key: [pfr_id, season]
+        description: >
+          NFL Combine workout measurements by draft class year. One row per
+          player. NULL means a drill was not performed or not recorded.
+        ai_context:
+          synonyms:
+            - "combine results"
+            - "NFL Combine"
+            - "athletic testing"
+            - "40-yard dash"
+          instructions: >
+            Join pfr_id to players.pfr_id or draft_picks.pfr_player_id.
+            season = draft_year (same value in both columns).
+            forty = 40-yard dash in seconds (lower is faster).
+            bench = 225lb bench press reps (higher is stronger).
+            vertical = vertical leap in inches (higher is better).
+            broad_jump = standing broad jump in inches.
+            cone = 3-cone drill in seconds (lower is more agile).
+            shuttle = 20-yard short shuttle in seconds (lower is quicker).
+
+        fields:
+          - name: forty
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: forty
+            description: 40-yard dash time in seconds. Lower is faster. Primary speed metric.
+            ai_context:
+              synonyms: ["40 time", "40-yard dash", "sprint time", "speed"]
+
+          - name: bench
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: bench
+            description: 225-lb bench press reps. Higher is stronger.
+            ai_context:
+              synonyms: ["bench press", "strength"]
+
+          - name: vertical
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: vertical
+            description: Vertical leap in inches. Higher is more explosive.
+            ai_context:
+              synonyms: ["vertical jump", "vert", "explosiveness"]
+
+          - name: broad_jump
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: broad_jump
+            description: Standing broad jump in inches. Measures lower-body power.
+            ai_context:
+              synonyms: ["broad jump", "horizontal leap"]
+
+          - name: cone
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: cone
+            description: 3-cone drill in seconds. Lower is more agile. Measures change-of-direction.
+            ai_context:
+              synonyms: ["3-cone", "agility"]
+
+          - name: shuttle
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: shuttle
+            description: 20-yard short shuttle in seconds. Lower is quicker laterally.
+            ai_context:
+              synonyms: ["short shuttle", "lateral quickness"]
+
+      # -----------------------------------------------------------------------
+      - name: draft_picks
+        source: draft_picks.default.draft_picks
+        primary_key: [pfr_player_id, season]
+        description: >
+          Historical NFL Draft picks. One row per player selected. Includes
+          pick number, round, drafting team, position, college, and career
+          value metrics. gsis_id is available for most modern players.
+        ai_context:
+          synonyms:
+            - "draft picks"
+            - "NFL Draft"
+            - "draft history"
+            - "draft classes"
+          instructions: >
+            season = draft year (e.g. 2023 = 2023 NFL Draft).
+            gsis_id is populated for modern players and joins to players.gsis_id.
+            pfr_player_id joins to players.pfr_id and combine.pfr_id.
+            w_av = weighted approximate value (career metric, recent seasons
+            weighted more). Higher is better. hof = Hall of Fame flag (1/0).
+            side column: 'O' = offense, 'D' = defense, 'S' = special teams.
+
+        fields:
+          - name: w_av
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: w_av
+            description: Weighted Approximate Value. Career performance metric, recent seasons weighted more. Higher is better.
+            ai_context:
+              synonyms: ["weighted approximate value", "WAV", "career value"]
+
+          - name: car_av
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: car_av
+            description: Career Approximate Value (unweighted total).
+            ai_context:
+              synonyms: ["career AV", "total career value"]
+
+          - name: hof
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: hof
+            description: 1 if the player is in the Pro Football Hall of Fame.
+            ai_context:
+              synonyms: ["Hall of Fame", "HOF", "Canton"]
+
+          - name: pick
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: pick
+            description: Overall pick number (1 = first overall pick).
+            ai_context:
+              synonyms: ["overall pick", "pick number", "draft position"]
+
+          - name: gsis_id
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: gsis_id
+            description: gsis_id for most modern players. Joins directly to players.gsis_id.
+            ai_context:
+              synonyms: ["player gsis_id in draft"]
+
+    # -------------------------------------------------------------------------
+    relationships:
+
+      - name: pbp_to_players_passer
+        from: pbp
+        to: players
+        from_columns: [passer_id]
+        to_columns: [gsis_id]
+
+      - name: pbp_to_players_rusher
+        from: pbp
+        to: players
+        from_columns: [rusher_id]
+        to_columns: [gsis_id]
+
+      - name: pbp_to_players_receiver
+        from: pbp
+        to: players
+        from_columns: [receiver_id]
+        to_columns: [gsis_id]
+
+      - name: pbp_to_schedules
+        from: pbp
+        to: schedules
+        from_columns: [game_id]
+        to_columns: [game_id]
+
+      - name: player_stats_reg_to_players
+        from: player_stats_reg
+        to: players
+        from_columns: [player_id]
+        to_columns: [gsis_id]
+
+      - name: player_stats_week_to_players
+        from: player_stats_week
+        to: players
+        from_columns: [player_id]
+        to_columns: [gsis_id]
+
+      - name: player_stats_post_to_players
+        from: player_stats_post
+        to: players
+        from_columns: [player_id]
+        to_columns: [gsis_id]
+
+      - name: ngs_passing_to_players
+        from: ngs_passing
+        to: players
+        from_columns: [player_gsis_id]
+        to_columns: [gsis_id]
+
+      - name: ngs_receiving_to_players
+        from: ngs_receiving
+        to: players
+        from_columns: [player_gsis_id]
+        to_columns: [gsis_id]
+
+      - name: ngs_rushing_to_players
+        from: ngs_rushing
+        to: players
+        from_columns: [player_gsis_id]
+        to_columns: [gsis_id]
+
+      - name: pfr_advstats_pass_to_players
+        from: pfr_advstats_pass
+        to: players
+        from_columns: [pfr_id]
+        to_columns: [pfr_id]
+
+      - name: pfr_advstats_rush_to_players
+        from: pfr_advstats_rush
+        to: players
+        from_columns: [pfr_id]
+        to_columns: [pfr_id]
+
+      - name: pfr_advstats_rec_to_players
+        from: pfr_advstats_rec
+        to: players
+        from_columns: [pfr_id]
+        to_columns: [pfr_id]
+
+      - name: pfr_advstats_def_to_players
+        from: pfr_advstats_def
+        to: players
+        from_columns: [pfr_id]
+        to_columns: [pfr_id]
+
+      - name: snap_counts_to_players
+        from: snap_counts
+        to: players
+        from_columns: [pfr_player_id]
+        to_columns: [pfr_id]
+
+      - name: combine_to_players
+        from: combine
+        to: players
+        from_columns: [pfr_id]
+        to_columns: [pfr_id]
+
+      - name: draft_picks_to_players_gsis
+        from: draft_picks
+        to: players
+        from_columns: [gsis_id]
+        to_columns: [gsis_id]
+
+      - name: combine_to_draft_picks
+        from: combine
+        to: draft_picks
+        from_columns: [pfr_id, season]
+        to_columns: [pfr_player_id, season]
